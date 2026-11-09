@@ -1,0 +1,1650 @@
+### bitrack ###
+--- Page 1 ---
+BiTrack: Bidirectional Offline 3D Multi-Object Tracking Using
+Camera-LiDAR Data
+Kemiao Huang , Yinqi Chen , Meiying Zhang , Qi Hao
+Abstract— Compared with real-time multi-object tracking
+(MOT), offline multi-object tracking (OMOT) has the ad-
+vantages to perform 2D-3D detection fusion, erroneous link
+correction, and full track optimization but has to deal with the
+challenges from bounding box misalignment and track evalua-
+tion, editing, and refinement. This paper proposes “BiTrack”,
+a 3D OMOT framework that includes modules of 2D-3D
+detection fusion, initial trajectory generation, and bidirectional
+trajectory re-optimization to achieve optimal tracking results
+from camera-LiDAR data. The novelty of this paper includes
+threefold: (1) development of a point-level object registration
+technique that employs a density-based similarity metric to
+achieve accurate fusion of 2D-3D detection results; (2) develop-
+ment of a set of data association and track management skills
+that utilizes a vertex-based similarity metric as well as false
+alarm rejection and track recovery mechanisms to generate
+reliable bidirectional object trajectories; (3) development of a
+trajectory re-optimization scheme that re-organizes track frag-
+ments of different fidelities in a greedy fashion, as well as refines
+each trajectory with completion and smoothing techniques.
+The experiment results on the KITTI dataset demonstrate
+that BiTrack achieves the state-of-the-art performance for 3D
+OMOT tasks in terms of accuracy and efficiency.
+I. I NTRODUCTION
+Many applications, such as movement analysis and dataset
+annotation, require high-accuracy object trajectories from
+offline multi-object tracking (OMOT). Real-time multi-object
+tracking (MOT) typically uses tracking-by-detection [1]–[4]
+or joint detection and tracking [5]. OMOT generally prefers
+the former, as many post-processing and global optimiza-
+tion techniques rely on detection results. OMOT association
+frameworks fall into two categories: (1) optimization and
+clustering of detection results [6]–[8], and (2) editing and
+refining initial trajectories [3], [4], [9]–[11]. Both depend on
+detection quality. The first category struggles with context
+inconsistency and computational instability due to the lack
+of sequential information, while the second guarantees per-
+formance by using sequential tracking results. Many methods
+improve 3D detection using 2D results, but are limited
+by the cascade pipeline [12] or 2D-3D registration errors
+[13]. Therefore, to develop a post-processing-based OMOT
+Kemiao Huang and Yinqi Chen are co-first authors; Corresponding
+author: Meiying Zhang (e-mail: zhangmy@sustech.edu.cn), and Qi Hao (e-
+mail: hao.q@sustech.edu.cn)
+All authors are within the Research Institute of Trustworthy Autonomous
+Systems, and Department of Computer Science and Engineering, Southern
+University of Science and Technology (SUSTech), Shenzhen 518055, China.
+This work is jointly supported by the National Natural Science
+Foundation of China (62261160654), the Shenzhen Fundamental Re-
+search Program (JCYJ20220818103006012, KJZD20231023092600001),
+and the Shenzhen Key Laboratory of Robotics and Computer Vision
+(ZDSYS20220330160557001).
+3D Object Detection
+2D-3D Detection
+Fusion
+Initial Trajectory
+Generation
+TrajectoryRe-
+Optimization
+2D Instance Segmentation
+Fig. 1: A post-processing based offline 3D multi-object
+tracking framework with three main stages.
+framework (Fig. 1), the following technical challenges must
+be well dealt with:
+1) 2D-3D object registration. Sensor miscalibration, oc-
+clusion, detection errors, and bounding box misalign-
+ment introduce noise in post-fusion registration.
+2) Initial trajectory generation . Association accuracy
+relies on object similarity and track management, but
+is hindered by complex motion, false alarms, and
+reappearances.
+3) Trajectory post-processing. Involves (1) reorganizing
+trajectories via evaluation and association, and (2)
+refining individual trajectories through completion and
+regression, facing temporal contradictions, uncertain-
+ties, and high computational cost.
+Several detection fusion methods [13] use 2D IoUs be-
+tween 2D and 3D bounding boxes as fusion cues, but this
+can cause ambiguities due to occlusions. Most real-time
+MOT methods [1], [2], [4], [12] use bounding box-based
+metrics for object similarity and life cycle mechanisms for
+track management, yet few address metric limitations or
+detection errors. Many OMOT methods refine trajectories
+with clustering [8], association [4] or regression [4], [11],
+but struggle to re-organize trajectories using global sequential
+information.
+This paper presents “BiTrack”, an OMOT framework
+which enables robust 2D-3D detection fusion, reliable initial
+trajectory generation, and efficient trajectory re-optimization.
+The contributions of this work include:
+1) Development of a 2D-3D detection fusion module that
+utilizes point-level representations and object point
+densities to achieve robust object registration.
+2) Development of a trajectory generation module that
+employs a scale-balanced object similarity metric and
+an offline-oriented track management mechanism to
+achieve reliable 3D MOT.
+3) Development of a trajectory re-optimization module
+that utilizes a priority-based fragment optimization,
+trajectory completion and smoothing skills for efficient
+2025 IEEE International Conference on Robotics and Automation (ICRA)
+May 19-23, 2025. Atlanta, USA
+979-8-3315-4139-2/25/$31.00 ©2025 IEEE 3247
+2025 IEEE International Conference on Robotics and Automation (ICRA) | 979-8-3315-4139-2/25/$31.00 ©2025 IEEE | DOI: 10.1109/ICRA55743.2025.11128796
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:15:55 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 2 ---
+TABLE I: A methodological comparison between BiTrack and typical 2D-3D object detection and tracking methods
+Category 2D-3D Object
+Fusion
+Initial Trajectory Generation Trajectory Post-Processing
+Similarity Evaluation Track Management Multi-Trajectory Fusion Single-Trajectory
+Refinement
+CLOCs [13] 3D Detection Box-Level Fusion - - - -
+AB3DMOT [2] 3D MOT × 3D IoU/Center Distance Online Hit-Miss × ×
+JRMOT [12] 3D MOT Frustum-Based
+Detection Pipeline Appearance / 2D IoU / 3D IoU Online Hit-Miss × ×
+AHCETE [8] 2D OMOT × Appearance / 2D Center Distance × Hierarchical Clustering ×
+TMOH [10] 2D OMOT × Appearance Occlusion-Aware
+Online Miss
+Bidirectional Trajectory Re-
+placement ×
+ReMOT [9] 2D OMOT × Appearance / 2D Center Distance Online Hit-Miss Forward Tracklet Split-Merge ×
+StrongSORT [4] 2D OMOT × Appearance & 2D Center Distance Online Hit-Miss Tracklet Association LI & GPR
+3DAL [11] 3D OMOT × 3D IoU/Center Distance Online Hit-Miss × Deep Learning
+Regression
+PC3T [3] 3D OMOT × 3D Center Distance Online Miss × Kalman Filter
+Prediction
+BiTrack (ours) 3D OMOT Point-Level Fusion 3D Normalized Center Distance Improved Offline
+Hit-Miss
+Bidirectional Trajectory Split-
+Merge LI & CSA & GPR
+“×”: unsupported functionality, “LI”: linear interpolation, “CSA”: confidence-based size averaging, “GPR”: Gaussian process regression
+bidirectional fusion and trajectory refinement.
+4) Release of the source code of this work at https:
+//github.com/Kemo-Huang/BiTrack.
+II. R ELATED WORK
+Typical methods for 2D-3D object detection, real-time
+MOT and OMOT are summarized in TABLE I. There are
+many multi-modal methods in 3D object detection [13], [14]
+and 3D MOT [12]. JRMOT [12] adopts the frustum-based
+fusion method [14] for cascade 2D-3D detection, where
+the 2D detection becomes the bottleneck. CLOCs [13] uses
+separate detection branches and re-evaluates 3D detection
+confidences using 2D results. However, the 2D-3D object
+correspondences are based on 2D IoU, which may suffer
+from object occlusions.
+IoU and the center distance are two prevalent object
+motion similarity metrics for 2D and 3D MOT [2]–[4],
+[8], [9], [11], [12]. Both metrics provide incomplete spatial
+information, while 2D appearance similarities are hard to
+be combined with the latter due to the scale gap [4].
+In addition, hit-miss schemes are commonly used in the
+track management [2]–[4], [9], [11], [12] but most are only
+designed for online applications.
+Many OMOT methods [3], [4], [9]–[11] perform tra-
+jectory post-processing based on real-time MOT, requiring
+sequential association. Methods like min-cost flow [6] and
+hierarchical clustering [8] merge detections globally with-
+out sequential cues, but suffer from high computation and
+inconsistent object similarities. ReMOT [9] uses a sliding
+window to re-evaluate 2D object similarities for tracklet split-
+merge, while TMOH [10] assembles forward and backward
+sequences, addressing object link contradictions by replacing
+the entire trajectory. Single-trajectory refinement can be done
+using physical [3], [4] or deep learning models [11].
+BiTrack follows the refinement scheme for both detec-
+tion and tracking. In contrast to previous works, this work
+provides the features of point-level detection fusion, robust
+motion-based initial trajectory generation, as well as split-
+merge based bidirectional trajectory re-optimization.
+III. S YSTEM SETUP AND PROBLEM STATEMENT
+BiTrack can be divided into three main modules: (1) 2D-
+3D object detection, (2) initial trajectory generation, and (3)
+bidirectional trajectory re-optimization, as shown in Fig. 2.
+The whole pipeline is fully automatic.
+For data pre-processing, object detectors localize 2D ob-
+jects D2D and 3D objects D3D with detection confidences
+C2D and C3D in separate branches. BiTrack performs OMOT
+as follows.
+Firstly, the 2D-3D object fusion module performs the
+object registration between D2D and D3D using camera
+intrinsic parameters K, camera-LiDAR extrinsic parameters
+[R | t], and 2D-3D detection similarities WD ∈ R+. The
+2D-3D object registration is addressed as a complete bipartite
+graph matching problem to solve the assignment matrix X D:
+X D∗ = arg max
+XD
+X
+D2D
+i ∈D2D
+X
+D3D
+j ∈D3D
+W D
+i,j XD
+i,j
+s.t.
+
+
+
+X
+D3D
+j ∈D3D
+XD
+i,j ≤ 1 ∀D2D
+i ∈ D2D
+X
+D2D
+i ∈D2D
+XD
+i,j ≤ 1 ∀D3D
+j ∈ D3D
+XD
+i,j ∈ {0, 1} ∀ D2D
+i ∈ D2D, ∀D3D
+j ∈ D3D
+(1)
+The final 3D detection inputs for tracking D = {D3D
+i ∈
+D3D | f D(D3D
+i ) = 1} are selected from D3D according to
+C3D, WD, and X D∗ with the detection decision function
+f D(·):
+f D(D3D
+i ) = 1
+ 
+C3D
+i ≥ θdet
+
+∨
+
+∃D2D
+j ∈ D2D : W D
+i,j XD∗
+i,j ≥ α
+ 
+(2)
+where θdet is the detection confidence threshold, α is the
+similarity threshold, and 1[·] → {0, 1} is the indicator
+function.
+Secondly, the initial trajectory generation module per-
+forms the association between detected objects D and
+predicted objects ˆD with detection-prediction similarities
+WT ∈ R+. The association is also formulated as the bipartite
+matching problem to solve the assignment matrix X T:
+X T∗ = arg max
+XT
+X
+Di ∈D
+X
+ˆDj ∈ ˆD
+W T
+i,j XT
+i,j
+s.t.
+
+
+
+X
+ˆDj ∈ ˆD
+XT
+i,j ≤ 1 ∀Di ∈ D
+X
+Di ∈D
+XT
+i,j ≤ 1 ∀ ˆDj ∈ ˆD
+XT
+i,j ∈ {0, 1} ∀ Di ∈ D, ∀ ˆDj ∈ ˆD
+(3)
+Tracked objects D′ = {Di ∈ D | g(Di) = 1 } are
+sequentially selected from D according to WT and X T∗
+3248
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:15:55 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 3 ---
+Camera Video
+LiDAR Point
+Cloud Flow
+Sensor
+Calibration
+3D Object
+Detection
+2D Instance
+Segmentation
+Point-Level
+2D-3D Object
+Fusion
+Backward 3D MOT
+Forward 3D MOT
+2D-3D Object
+Detection
+Initial Trajectory
+Generation
+Bidirectional Trajectory
+Re-Optimization
+Trajectory
+Clustering
+Single-Trajectory
+Refinement
+Multi-Trajectory
+Fusion
+Final
+Trajectories
+Instance
+Masks
+Object
+Points
+Similarity Evaluation
+Track Management
+3D Kalman Filter
+Bipartite Matching
+Bipartite
+Graph
+Tracking
+ID Forest
+Breadth
+-First
+Search
+Confidence
+Evaluation
+Trajectory
+Split
+Fragment
+Merge
+Trajectory
+Completion
+Trajectory
+Smoothing
+Fig. 2: The system architecture of BiTrack.
+Fig. 3: A visual explanation of the symbol definitions for
+bidirectional trajectory fusion. Best viewed in color.
+with the track decision function f T(·) and the track man-
+agement function g(·) in case of false alarms and object re-
+appearances:
+fT(Di) =1
+h
+∃ ˆDj ∈ ˆD : W T
+i,j XT∗
+i,j ≥ β
+i
+(4)
+∀XT∗
+i,j = 1 :nhit(Di) =
+(
+nhit(Di) if f T(Di) = 0
+nhit(Dj ) + 1 if f T(Di) = 1 (5)
+nmiss(Di) =
+(
+nmiss(Di) + 1 if f T(Di) = 0
+0 if f T(Di) = 1 (6)
+g(Di) =
+
+
+
+1 if
+
+nhit(Di) ≥ θhit
+
+∧
+
+nmiss(Di) = 0
+
+−1 if nmiss(Di) ≥ θmiss
+0 otherwise
+(7)
+where β is the tracking similarity threshold, nhit, nmiss ∈ N0
+are the times of hit and miss, and θhit, θmiss ∈ N0 are thresh-
+olds. Tracking IDs can only be assigned to confirmed objects
+(g(·) = 1). Object candidates (g(·) = 0)are used for tem-
+porary object prediction while dead objects (g(·) =−1) are
+permanently removed. The confirmed objects with the same
+IDs are connected with object links L to generate trajectories
+T . The same detection input D is used to perform MOT
+in both forward and backward time directions to generate
+trajectories T A =
+
+DA, LA	
+and T B =
+
+DB, LB	
+.
+Finally, the trajectory re-optimization module performs
+the trajectory fusion and refinement. Fig. 3 demonstrates the
+symbol definitions. T A and T B are split into track fragments
+F A and F B by the common links LA ∩ LB. The fragments
+are selected via the optimization of fragment priorities under
+the condition of exclusive object frames:
+F ∗ = arg max
+F
+X
+Fi ∈FA∪FB
+h(Fi)
+s.t. ∀Ti ∈ T , ∀Dj ̸= Dk ∈ Ti : t(Dj ) ̸= t(Dk)
+(8)
+where t(·) is the frame of an object and h(·) is the fragment
+priority function:
+h(Fi) =
+
+
+
+Z if Fi ∈ F A ∩ F B
+max
+
+N A
+i (1), NA
+i (−1)
+	
+if Fi ∈ F A − F B
+max
+
+N B
+i (1), NB
+i (−1)
+	
+if Fi ∈ F B − F A
+(9)
+where Z ≫ N is a large integer, Ni(1) and Ni(−1) stand
+for the sequential index of the first and last object of Fi
+in the entire trajectory respectively. The fused trajectories
+T C = {DC, LC} are obtained from the optimization results
+F ∗. The object localization results can be further regressed
+using the temporal information:
+DC LC
+− − →D+ (10)
+The final trajectory outputs become T + = {D+, LC}.
+Therefore, this work is to solve the following problems:
+1) How to evaluate 2D-3D detection similarities WD?
+2) How to evaluate detection-prediction similarities WT
+and design the hit-miss thresholds {θhit, θmiss}?
+3) How to perform the optimization of eq. (8) and the
+refinement of eq. (10)?
+IV. P ROPOSED METHODS
+A. 2D-3D Object Registration via Points
+This work suggests that 2D IoU has three shortages for
+2D-3D object fusion: (1) the PVs of 3D boxes are larger
+than 2D boxes for occluded objects, (2) the PVs of 3D
+boxes could overlap, and (3) boxes contain space at corners.
+However, the point density metric between 2D segmentation
+masks and 3D object points can perfectly tackle those
+problems.
+1) Point-Level Segmentation: To obtain pixel-level object
+masks, 2D instance segmentation is required. On the other
+hand, the 3D bounding boxes obtained from 3D object detec-
+tion can be directly used to crop LiDAR points for efficiency
+because 3D objects rarely overlap, especially for rigid bodies.
+Although cropping LiDAR points within bounding boxes
+may cost more computations, the operations of multiple
+data frames can be paralleled by multi-processing for faster
+execution thanks to the offline setting.
+3249
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:15:55 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 4 ---
+(a) Original detection results [16]
+ (b) After 2D-3D object fusion
+Fig. 4: The bird’s-eye view of 2D-3D object fusion results on
+a sequence. The gray boxes are the objects that the dataset
+doesn’t care. The green boxes are true positives. The blue
+boxes are false positives. The red boxes are false negatives.
+2) Point-Level Association: After removing background,
+the correspondence between 2D and 3D objects should be
+robust against object occlusions. However, sensor miscalibra-
+tion and detection inaccuracy may still produce registration
+noises, e.g., a 2D instance mask can include the projected
+points of multiple 3D objects. Thus, the 2D-3D object
+similarity should be quantified and the optimization should
+be performed. This work uses the number of overlapped
+pixels as W D and the Hungarian algorithm [15] to solve
+the eq. (1).
+Fig. 4 demonstrates the effect of 2D-3D object fusion. The
+original detection results are generated by the SOTA method
+VirConv [16] on the KITTI [17] dataset. The proposed 2D-
+3D fusion method can effectively reduce false alarms, while
+high-quality detection results can be successfully selected for
+the trajectory generation stage. The whole fusion procedure
+is shown in Algorithm 1.
+B. Reliable Initial Trajectory Generation
+Most 3D MOT methods follow the SORT [1] framework.
+This work improves the simple 3D MOT baseline [18] with
+the following techniques for reliable trajectory generation.
+1) Integrated Object Motion similarity Metric: Both 3D
+IoU and the center distance (CD) metrics have shortages: (1)
+3D IoU is too sensitive to object rotation errors, (2) CD does
+not utilize object size and rotation cues, (3) 3D IoU is in-
+comparable (zero) for separate objects, and (4) the numerical
+value of CD has no upper bound. To complement these two
+metrics, this work proposes the normalized center distance
+(NCD) as the geometric cost. Specifically, the proposed NCD
+similarity metric WT for Di and ˆDj is defined as:
+W T
+i,j = 1− d(ci, ˆcj )
+max
+n
+d(vi,k, ˆvj,l) | vi,k ∈ V i, ˆvj,l ∈ ˆV j
+o (11)
+where d(·) denotes the Euclidean distance, c denotes the
+center of the bounding box, V denotes bounding box ver-
+tices, ˆcj and ˆV j are predicted values from the Kalman
+filter. The NCD metric provides two main advantages for
+object similarity evaluation: (1) simultaneous utilization of
+bounding box positions, sizes, and rotations; (2) normalized
+numerical value for easy combination with other similarities
+(e.g., the weighted sum with the cosine similarity between
+appearance embeddings).
+Algorithm 1: Point-level fusion between 2D instance
+masks and 3D bounding boxes
+Input: 2D instance masks D2D;
+3D bounding boxes D3D;
+3D detection confidences C3D;
+LiDAR point clouds PLiDAR;
+Sensor calibration parameters {K, [R | t]};
+Output: the selected 3D bounding boxes D;
+1 P3D ← Crop the LiDAR points within D3D from PLiDAR;
+2 P2D ← Project P3D to camera images using {K, [R | t]};
+3 P2D ← Align P2D to image pixels;
+4 WD ←
+nP 2D
+i ∩ D2D
+j
+ : P 2D
+i ∈ P2D, D2D
+j ∈ D2D
+o
+;
+5 X D∗ ← Solve the eq. (1) using the Hungarian algorithm;
+6 D ←
+n
+D3D
+i | f D(D3D
+i ) = 1, D3D
+i ∈ D3D
+o
+;
+7 return D
+2) Previous Tracklet Recovery and Double Miss Thresh-
+olds: Online tracking results should be reported sequentially
+but OMOT can break this restriction. Once objects are
+confirmed, their previous tracklets can be recovered to gen-
+erate more complete trajectories. Additionally, based on the
+intuition that false alarms usually do not appear continually,
+an extra miss threshold is set for track candidates so that
+false alarms can be quickly rejected.
+3) Velocity Re-initialization: Most SORT-based methods
+[3], [4], [18] simply initialize object linear velocities as zeros
+and leave the estimation to the Kalman filter in later updates.
+However, this inaccurate prior knowledge makes the Kalman
+filter hard to converge and leads to inaccurate predictions
+in the early stage. This work proposes to re-initialize the
+states of objects after they are firstly matched with new
+measurements. Specifically, the static state is updated exactly
+as the new measurement and the linear velocity is re-
+initialized as the translation divided by the passed frames.
+All state covariances are updated as usual.
+C. Efficient Trajectory Re-Optimization
+Forward and backward trajectory integration realizes false
+alarms and ID switches, while sequential bounding box
+refinement realizes false negatives and regression errors. This
+work proposes three efficient post-processing steps for MOT
+to improve the link accuracy, the bounding box integrity, and
+the trajectory smoothness.
+1) Bidirectional Trajectory Clustering: Clustering for-
+ward and backward trajectories into groups for fusion is
+based on equal bounding boxes. By ordering bounding boxes
+sequentially, the “two pointers” technique speeds up the
+search. Trajectories are represented as a bipartite graph,
+where nodes are trajectory IDs and edges indicate matching
+bounding boxes. Clustering is performed via breadth-first
+search (BFS) [19] to convert the bipartite graph into a forest.
+2) Bidirectional Trajectory Fusion: This work identifies
+two common discrepancies in forward and backward track-
+ing: (1) large velocity changes and (2) incorrect velocity
+initialization. The bidirectional fusion strategy has two main
+goals: (1) merge as many trajectory fragments as possible,
+and (2) prioritize fragments from longer trajectories. For
+clusters with no time contradiction, trajectories are directly
+merged; otherwise, they are split, selected, and merged at the
+3250
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:15:55 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 5 ---
+(a) Forward track-
+ing results
+(b) Backward track-
+ing results
+(c) Bidirectional fu-
+sion results
+Fig. 5: Visualization of the bidirectional trajectory fusion.
+Circles represent detected boxes and arrows are directions.
+fragment level. Common object links form guaranteed frag-
+ments, while others are candidates. Fragments are merged
+only if their time frames do not overlap. A greedy approach,
+based on the priority function (8), is used to select candidate
+fragments. A visual example is shown in Fig. 5, with the full
+procedure in Algorithm 2.
+3) Single-Trajectory Refinement: After obtaining accurate
+object links, each single trajectory can be further refined via
+trajectory completion and smoothing. For trajectory comple-
+tion, this work performs the linear interpolation on 3D po-
+sitions and detection confidences to recover missed objects.
+To avoid adding false positives, this work only interpolates
+objects in a sliding window of size θinter and filters the
+results that are too close to existing objects according to
+NCD and the threshold γ. For trajectory smoothing, this
+work performs confidence-weighted size averaging for rigid
+objects and regresses 3D positions via the Gaussian process,
+whose radial basis function kernel e− ||x−x′ ||2
+2σ2 is based on
+the adaptive smoothness control function [4]: σ = τ log τ 3
+|Ti|,
+where |Ti| is the trajectory length and τ is a hyper-parameter.
+V. E XPERIMENTS
+A. Dataset and Evaluation Metrics
+The KITTI tracking benchmark [17] was used as the
+evaluation platform. It includes 21 training sequences and 29
+test sequences of front-view camera images and LiDAR point
+clouds. All sensor data are pre-calibrated and synchronized.
+The ground truth (GT) consists of 3D bounding boxes,
+categories, and tracking IDs. The experiments followed the
+official evaluation setting of the KITTI benchmark and the
+labels of cars in all training sequences were used. The
+judgement of true positive (TP), false positive (FP) and false
+negative (FN) for object detection is based on the rotated
+IoU in the 3D space, while the judgement for MOT is based
+on the 2D IoU on the image plane. The 3D IoU threshold
+for detection is 0.7 and the 2D IoU threshold for tracking
+is 0.5. The average precision (AP) metric with 40 recall
+positions is used for object detection. MOTA [21] and HOTA
+[22] metrics are two main metrics for MOT, where MOTA
+penalizes FP, FN, and ID switches (IDSW) while HOTA
+relies on the detection accuracy (DetA) and the association
+accuracy (AssA).
+Algorithm 2: Bidirectional multi-trajectory fusion
+Input: Tracking ID clusters S;
+Forward trajectories T A and object links LA;
+Backward trajectories T B and object links LB;
+Common boxes between trajectories O;
+Output: Fused trajectories T C;
+1 T C ← ∅;
+2 foreach Si ∈ S do
+3 if |Si| = 1then
+4 L(Si ) ←
+
+Lj | id(Lj ) ∈ Si, Lj ∈ LA ∪ LB	
+;
+5 else
+6 O(Si ) ← {Oj | id(Oj ) ∈ Si, Oj ∈ O};
+7 if O(Si ) are in different frames then
+8 L(Si ) ← Link O(Si ) together;
+9 else
+10 T A(Si ) ←
+
+Tj | id(Tj ) ∈ Si, Tj ∈ T A	
+;
+11 T B(Si ) ←
+
+Tj | id(Tj ) ∈ Si, Tj ∈ T B	
+;
+12 F A(Si ), F B(Si ) ← Split T A(Si ), T B(Si ) using
+LA(Si ) ∩ LB(Si );
+13 F (Si ) ← F A(Si ) ∩ F B(Si );
+14 M ← F A(Si ) ∪ F B(Si ) − F (Si );
+15 H = {h(Fj ) | Fj ∈ M};
+16 M ← Sort M by H in descending order;
+17 foreach Fj ∈ M do
+18 N ← {Fk | id(Fj ) =id(Fk), Fk ∈
+F (Si )} ∪ {Fj };
+19 if the objects of N are in different frames then
+20 F (Si ) ← F (Si ) ∪ {Fj }
+21 end
+22 end
+23 end
+24 end
+25 T C ← T C ∪ F (Si );
+26 end
+27 return T C
+B. Implementation Details
+The 3D object detection method VirConv [16] and the 2D
+instance segmentation method PointTrack [23] were applied
+in the pre-processing to generate high-quality detection input.
+In the 2D-3D object fusion, this work set θdet = 0.85 and
+α = 0. In the 3D trajectory generation, this work set β = 0.5,
+the initial state covariance P 0 = 10I, the process covariance
+Q = 2I, and the measurement covariance R = I, where I
+is the identity matrix. In the track management, this work
+set θhit = 6 and θmiss = {5, 28} for new trajectories and
+confirmed trajectories respectively. In the single-trajectory
+refinement, this work set θinter = 4, γ = 0.35, and τ = 5.5.
+C. Comparative Results
+This work compared to a strong OMOT baseline PC3T [3],
+which also uses the tracking-by-detection paradigm based
+on the 3D Kalman filter. Both BiTrack and PC3T need no
+network training process for tracking, thus this work used
+all 21 training sequences for evaluation. To perform fair
+comparison, all experiments used the same 3D object detec-
+tion source (VirConv [16]). TABLE II shows the superiority
+of BiTrack in terms of both MOTA (+1.62%) and HOTA
+(+1.26%). To further demonstrate the effectiveness of the
+proposed methods, this work re-implemented the baseline
+with the proposed 2D-3D detection fusion module and the
+single-trajectory refinement module based on the official
+code. The results show that the both two modules produce
+performance gains for PC3T but BiTrack is still better than
+the improved baseline.
+3251
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:15:55 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 6 ---
+TABLE II: Comparison with PC3T [3] on the KITTI training set.
+FP↓ FN↓ IDSW↓ MOTA↑ DetA↑ AssA↑ HOTA↑
+PC3T 1352 1959 13 86.19 % 79.95 % 86.87 % 83.28 %
+PC3T+ 18 1195 496 86.62 % 80.30 % 86.63 % 83.34 %
+PC3T++ 14 1202 494 86.62 % 80.67 % 87.37 % 83.86 %
+BiTrack (ours) 1266 1655 13 87.81 % 81.93 % 87.38 % 84.54 %
++ using our 2D-3D detection fusion module; ++ using our 2D-3D detection fusion and single-trajectory refinement modules.
+TABLE III: Comparison with state-of-the-art 3D OMOT methods on the KITTI test set.
+FP↓ FN↓ IDSW↓ MOTA↑ DetA↑ AssA↑ HOTA↑
+CasTrack [3], [20] 1227 1533 24 91.91 % 78.58 % 84.22 % 81.00 %
+VirConvTrack [3], [16] 702 2648 8 90.24 % 78.14 % 86.39 % 81.87 %
+BiTrack (ours) 959 1892 21 91.65 % 80.13 % 86.07 % 82.69 %
+Only cars are evaluated. Results are available at https://www.cvlibs.net/datasets/kitti/eval_tracking.php
+TABLE IV: Evaluation of different object representations
+and registration cues for 2D-3D object fusion.
+2D Obj. 3D Obj. AP↑
+(mod.)
+AP↑
+(hard) MOTA↑ HOTA↑
+× Box 96.01 % 95.69 % 86.27 % 83.03 %
+Box Box 96.32 % 95.99 % 87.40 % 83.45 %
+Mask Box 96.49 % 93.94 % 83.94 % 81.14 %
+Box Point 96.32 % 96.00 % 87.31 % 83.40 %
+Mask Point 96.33 % 96.01 % 87.41 % 83.46 %
+This work submitted the test-set results to the KITTI
+test server. TABLE III shows the MOT result comparison
+on the KITTI test set, where BiTrack outperforms all the
+other public MOT methods in terms of HOTA. The main
+superiority falls in the detection accuracy (DetA) due to
+the relatively fewer false alarms and missed objects. The
+association accuracy (AssA) is a bit lower than VirConvTrack
+[3], [16], which may due to the larger number of detected
+objects.
+D. Ablation Studies
+For 2D-3D object fusion, this work compared four object
+representations: (1) 3D bounding boxes, (2) 2D bounding
+boxes, (3) 3D object points, and (4) 2D instance masks,
+focusing on detection precision and tracking accuracy. The
+2D bounding box was derived from 2D instance masks, with
+the number of inside-box pixels used as the similarity metric
+for both “box-point” and “mask-box” fusion. All methods
+shared the same MOT module and detection confidence
+threshold. TABLE IV shows that the proposed “mask-point”
+fusion outperforms other box-level methods in both detection
+precision and tracking accuracy for hard objects.
+For the initial trajectory generation, the proposed improve-
+ments for the Kalman filter-based 3D MOT were evaluated.
+TABLE V shows that all the modifications have positive ef-
+fects on tracking accuracy, especially for the NCD similarity
+metric and the track recovery. The double miss thresholds
+and the velocity re-initialization gives small improvements.
+The bidirectional multi-trajectory fusion module was eval-
+uated based on the best unidirectional tracking results. TA-
+BLE VI shows that the backward trajectories are slightly less
+accurate than the forward trajectories in average. However,
+the proposed method can improve the trajectories by select-
+ing the better object links between them.
+The single trajectory refinement module evaluated
+weighted size averaging, linear interpolation, and Gaussian
+TABLE V: Evaluation of the different similarity metrics and
+track management mechanisms for 3D trajectory generation.
+WT Track
+Recov. θmiss Velocity
+Re-Init. MOTA↑ HOTA↑
+IoU × 28 × 86.67 % 82.87 %
+CD × 28 × 86.22 % 82.53 %
+NCD × 28 × 86.88 % 83.30 %
+NCD ! 28 × 87.31 % 83.54 %
+NCD ! {5, 28 } × 87.32 % 83.55 %
+NCD ! {5, 28 } ! 87.37 % 83.55 %
+TABLE VI: Evaluation of the proposed bidirectional multi-
+trajectory fusion method.
+MOTA↑ HOTA↑
+forward MOT 87.37 % 83.55 %
+backward MOT 87.32 % 83.37 %
+bidirectional fusion 87.38 % 83.59 %
+TABLE VII: Evaluation of the proposed single-trajectory
+refinement method.
+Weighted
+Size Avg.
+Linear
+Interp.
+Gaussian
+Process MOTA↑ HOTA↑
+× × × 87.38 % 83.59 %
+! × × 87.46 % 84.23 %
+! ! × 87.77 % 84.43 %
+! ! ! 87.81 % 84.54 %
+process regression with bidirectional fusion results. TABLE
+VII shows that all methods enhanced performance by gen-
+erating more complete trajectories and improving object
+regression accuracy.
+VI. C ONCLUSION
+This paper introduces BiTrack, an advanced OMOT frame-
+work that integrates 2D-3D detection fusion, bidirectional
+tracking, and trajectory re-optimization. By leveraging point-
+level correspondences, an object motion similarity metric,
+enhanced hit-miss management, fragment fusion techniques,
+and physical models, BiTrack ensures the accurate generation
+of offline trajectories. Demonstrating state-of-the-art perfor-
+mance on the KITTI leaderboard, BiTrack, with its modular
+architecture and fully automated pipeline, is highly adaptable
+for use in 3D object annotation platforms and various other
+offline tasks.
+3252
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:15:55 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 7 ---
+REFERENCES
+[1] A. Bewley, Z. Ge, L. Ott, F. Ramos, and B. Upcroft, “Simple online
+and realtime tracking,” in 2016 IEEE International Conference on
+Image Processing (ICIP) , 2016, pp. 3464–3468.
+[2] X. Weng, J. Wang, D. Held, and K. Kitani, “3D Multi-Object Tracking:
+A Baseline and New Evaluation Metrics,” IROS, 2020.
+[3] H. Wu, W. Han, C. Wen, X. Li, and C. Wang, “3d multi-object
+tracking in point clouds based on prediction confidence-guided data
+association,” IEEE Transactions on Intelligent Transportation Systems,
+vol. 23, no. 6, pp. 5668–5677, 2022.
+[4] Y . Du, Z. Zhao, Y . Song, Y . Zhao, F. Su, T. Gong, and H. Meng,
+“Strongsort: Make deepsort great again,” IEEE Transactions on Mul-
+timedia, pp. 1–14, 2023.
+[5] K. Huang and Q. Hao, “Joint multi-object detection and tracking
+with camera-lidar fusion for autonomous driving,” in 2021 IEEE/RSJ
+International Conference on Intelligent Robots and Systems (IROS) ,
+2021, pp. 6983–6989.
+[6] L. Zhang, Y . Li, and R. Nevatia, “Global data association for multi-
+object tracking using network flows,” in 2008 IEEE Conference on
+Computer Vision and Pattern Recognition , 2008, pp. 1–8.
+[7] C. Wang, Y . Wang, Y . Wang, C.-T. Wu, and G. Yu, “mussp: Efficient
+min-cost flow algorithm for multi-object tracking,” in Advances in
+Neural Information Processing Systems , H. Wallach, H. Larochelle,
+A. Beygelzimer, F. d'Alch´e-Buc, E. Fox, and R. Garnett, Eds., vol. 32.
+Curran Associates, Inc., 2019.
+[8] K. Zhao, T. Imaseki, H. Mouri, E. Suzuki, and T. Matsukawa, “From
+certain to uncertain: Toward optimal solution for offline multiple
+object tracking,” in 2020 25th International Conference on Pattern
+Recognition (ICPR), 2021, pp. 2506–2513.
+[9] F. Yang, X. Chang, S. Sakti, Y . Wu, and S. Nakamura, “Remot: A
+model-agnostic refinement for multiple object tracking,” Image and
+Vision Computing, vol. 106, p. 104091, 2021.
+[10] D. Stadler and J. Beyerer, “Improving multiple pedestrian tracking
+by track management and occlusion handling,” in 2021 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR) ,
+2021, pp. 10 953–10 962.
+[11] C. R. Qi, Y . Zhou, M. Najibi, P. Sun, K. V o, B. Deng, and D. Anguelov,
+“Offboard 3d object detection from point cloud sequences,” in Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), June 2021, pp. 6134–6144.
+[12] A. Shenoi, M. Patel, J. Gwak, P. Goebel, A. Sadeghian, H. Rezatofighi,
+R. Mart ´ın-Mart´ın, and S. Savarese, “Jrmot: A real-time 3d multi-
+object tracker and a new large-scale dataset,” in 2020 IEEE/RSJ
+International Conference on Intelligent Robots and Systems (IROS) ,
+2020, pp. 10 335–10 342.
+[13] S. Pang, D. Morris, and H. Radha, “Clocs: Camera-lidar object candi-
+dates fusion for 3d object detection,” in 2020 IEEE/RSJ International
+Conference on Intelligent Robots and Systems (IROS) , 2020, pp.
+10 386–10 393.
+[14] C. R. Qi, W. Liu, C. Wu, H. Su, and L. J. Guibas, “Frustum pointnets
+for 3d object detection from rgb-d data,” in Proceedings of the IEEE
+Conference on Computer Vision and Pattern Recognition (CVPR), June
+2018.
+[15] H. W. Kuhn, “The hungarian method for the assignment problem,”
+Naval research logistics quarterly , vol. 2, no. 1-2, pp. 83–97, 1955.
+[16] H. Wu, C. Wen, S. Shi, X. Li, and C. Wang, “Virtual sparse con-
+volution for multimodal 3d object detection,” in Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), June 2023, pp. 21 653–21 662.
+[17] A. Geiger, P. Lenz, and R. Urtasun, “Are we ready for autonomous
+driving? the kitti vision benchmark suite,” in 2012 IEEE Conference
+on Computer Vision and Pattern Recognition , 2012, pp. 3354–3361.
+[18] X. Weng, J. Wang, D. Held, and K. Kitani, “3d multi-object tracking:
+A baseline and new evaluation metrics,” in 2020 IEEE/RSJ Interna-
+tional Conference on Intelligent Robots and Systems (IROS), 2020, pp.
+10 359–10 366.
+[19] A. Bundy and L. Wallen, “Breadth-first search,” Catalogue of artificial
+intelligence tools, pp. 13–13, 1984.
+[20] H. Wu, J. Deng, C. Wen, X. Li, C. Wang, and J. Li, “Casa: A cascade
+attention network for 3-d object detection from lidar point clouds,”
+IEEE Transactions on Geoscience and Remote Sensing , vol. 60, pp.
+1–11, 2022.
+[21] K. Bernardin and R. Stiefelhagen, “Evaluating multiple object tracking
+performance: The clear mot metrics,” EURASIP Journal on Image and
+Video Processing, vol. 2008, no. 1, p. 246309, 2008.
+[22] J. Luiten, A. Osep, P. Dendorfer, P. Torr, A. Geiger, L. Leal-Taixe,
+and B. Leibe, “Hota: A higher order metric for evaluating multi-object
+tracking,” International Journal of Computer Vision , vol. 129, no. 2,
+pp. 548–578, 2021.
+[23] Z. Xu, W. Yang, W. Zhang, X. Tan, H. Huang, and L. Huang, “Segment
+as points for efficient and effective online multi-object tracking and
+segmentation,” IEEE Transactions on Pattern Analysis and Machine
+Intelligence, vol. 44, no. 10, pp. 6424–6437, 2022.
+[24] N. Wojke, A. Bewley, and D. Paulus, “Simple online and realtime
+tracking with a deep association metric,” in 2017 IEEE International
+Conference on Image Processing (ICIP) , 2017, pp. 3645–3649.
+[25] J. Deng, S. Shi, P. Li, W. Zhou, Y . Zhang, and H. Li, “V oxel r-
+cnn: Towards high performance voxel-based 3d object detection,”
+Proceedings of the AAAI Conference on Artificial Intelligence, vol. 35,
+no. 2, pp. 1201–1209, May 2021.
+[26] D. Neven, B. D. Brabandere, M. Proesmans, and L. Van Gool,
+“Instance segmentation by jointly optimizing spatial embeddings and
+clustering bandwidth,” in 2019 IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR) , 2019, pp. 8829–8837.
+[27] O. D. Team, “Openpcdet: An open-source toolbox for 3d object detec-
+tion from point clouds,” https://github.com/open-mmlab/OpenPCDet,
+2020.
+[28] H. Wu, Q. Li, C. Wen, X. Li, X. Fan, and C. Wang, “Tracklet proposal
+network for multi-object tracking on point clouds,” in Proceedings of
+the Thirtieth International Joint Conference on Artificial Intelligence,
+IJCAI-21, Z.-H. Zhou, Ed. International Joint Conferences on
+Artificial Intelligence Organization, 8 2021, pp. 1165–1171, main
+Track.
+[29] P. Tokmakov, A. Jabri, J. Li, and A. Gaidon, “Object permanence
+emerges in a random walk along memory,” in Proceedings of the
+39th International Conference on Machine Learning , ser. Proceedings
+of Machine Learning Research, K. Chaudhuri, S. Jegelka, L. Song,
+C. Szepesvari, G. Niu, and S. Sabato, Eds., vol. 162. PMLR, 17–23
+Jul 2022, pp. 21 506–21 519.
+[30] H. Wu, J. Deng, C. Wen, X. Li, C. Wang, and J. Li, “Casa: A cascade
+attention network for 3-d object detection from lidar point clouds,”
+IEEE Transactions on Geoscience and Remote Sensing , vol. 60, pp.
+1–11, 2022.
+3253
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:15:55 UTC from IEEE Xplore.  Restrictions apply. 
+
+### joint ###
+--- Page 1 ---
+Joint Multi-Object Detection and Tracking with Camera-LiDAR Fusion
+for Autonomous Driving
+Kemiao Huang 1 and Qi Hao 1,2,3∗
+Abstract— Multi-object tracking (MOT) with camera-LiDAR
+fusion demands accurate results of object detection, afﬁnity
+computation and data association in real time. This paper
+presents an efﬁcient multi-modal MOT framework with online
+joint detection and tracking schemes and robust data associa-
+tion for autonomous driving applications. The novelty of this
+work includes: (1) development of an end-to-end deep neural
+network for joint object detection and correlation using 2D
+and 3D measurements; (2) development of a robust afﬁnity
+computation module to compute occlusion-aware appearance
+and motion afﬁnities in 3D space; (3) development of a compre-
+hensive data association module for joint optimization among
+detection conﬁdences, afﬁnities and start-end probabilities.
+The experiment results on the KITTI tracking benchmark
+demonstrate the superior performance of the proposed method
+in terms of both tracking accuracy and processing speed.
+I. INTRODUCTION
+Multi-object tracking (MOT) is a central task for au-
+tonomous driving (AD) in dynamic environment perception
+and dataset annotation [1], [2]. In many AD-related object
+detection and tracking schemes, the camera-LiDAR fusion
+strategy is preferred [3]–[5], as the former provides high-
+resolution 2D information and the latter yields high-accuracy
+3D measurements. Usually, the performance of sensor fu-
+sion relies on the quality of sensor calibration. Compared
+with single-object tracking, MOT suffers more from target
+occlusions especially when the number of targets is large. A
+typical MOT system consists of (1) sensor calibration, (2)
+object detection, (3) object correlation, (4) data association,
+and (5) track management, as shown in Fig. 1.
+Despite many efforts in developing camera-LiDAR fusion
+based MOT systems, there are three main technical chal-
+lenges to overcome:
+1) Joint detection and tracking. Most MOT methods
+follow the tracking-by-detection paradigm, which per-
+forms object detection, object correlation and data
+association in a cascade pipeline, yielding redundant
+computations and sub-optimal solutions. A uniﬁed
+framework for joint detection and tracking with parallel
+object detection and correlation is more suitable for
+real time applications.
+This work is partially supported by the Shenzhen Fundamental Research
+Program (No: JCYJ20200109141622964), and the Intel ICRI-IACV Re-
+search Fund (CG#52514373).
+∗Corresponding author: Qi Hao (hao.q@sustech.edu.cn).
+1Department of Computer Science and Engineering, Southern University
+of Science and Technology, Shenzhen 518055, China.
+2Sifakis Research Institute of Trustworthy Autonomous Systems, South-
+ern University of Science and Technology, Shenzhen 518055, China.
+3Pazhou Lab, Guangzhou 510330, China.
+Fig. 1. An overview of the classical MOT system with camera-LiDAR
+fusion for autonomous driving. Frame t−1 and Frame t are two adjacent
+frames of fused 2D-3D data respectively. S1...4 represent tracking states.
+2) Robust afﬁnity computation. The quality of object
+features and afﬁnity metrics greatly affect data asso-
+ciation performance. A robust afﬁnity metric should
+incorporate appearance and motion cues to tackle the
+problems of tiny inter-object appearance differences,
+complex motions and dense distributions.
+3) Comprehensive data association. There are several
+uncertainties (e.g. detection mistakes, occlusions, re-
+ID errors, start or end) that could affect tracking
+results. Thus, it is necessary to take these factors
+comprehensively into account for data association.
+Current MOT methods can fall into two groups: (1)
+tracking by detection (TBD) [5]–[7], and (2) joint detection
+and tracking (JDT) [8]–[11]. The former trains object de-
+tection and re-identiﬁcation (Re-ID) models in two isolated
+systems and infers tracks in a cascade manner. Such a
+framework likely leads to local optima and costs extra
+GPU computations and memories. The latter shares object
+features between the two parallel models but needs to train
+a larger network with fewer training samples [10]. Most
+afﬁnity estimation methods [6], [8], [9], [12] are based on
+(1) Re-ID features and (2) motion predictions to improve
+tracking consistency. However, 2D appearance and motion
+cues suffer heavily from target occlusion and overlapping due
+to the lack of depth information, especially for dense target
+distributions. Most data association methods [5], [6], [8], [10]
+only consider the estimated afﬁnities to perform maximum
+bipartite matching [13], while classiﬁcation conﬁdences from
+detection models are only used to reduce false positives in
+pre-processing steps.
+In this paper, we propose a real-time and robust Joint
+Multi-Object Detection and Tracking (JMODT) system that
+performs joint learning of 3D object detection and tracking,
+with robust afﬁnity computation and comprehensive data
+2021 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS)
+September 27 - October 1, 2021. Prague, Czech Republic
+978-1-6654-1714-3/21/$31.00 ©2021 IEEE 6983
+2021 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) | 978-1-6654-1714-3/21/$31.00 ©2021 IEEE | DOI: 10.1109/IROS51168.2021.9636311
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:20:14 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 2 ---
+TABLE I. A methodological comparison between state-of-the-art MOT methods and the proposed method (JMODT).
+Type Method Object Detection and Correlation Afﬁnity Metric Data
+AssociationDetection Correlation Appearance Modality Motion Geometry
+Tracking
+by
+Detection
+ODESA [12] 2D Re-ID Camera KF 2D Distance HA
+SMAT [14] 2D Re-ID + Optical Flow Camera × 2D IoU HA
+JRMOT [7] 3D Re-ID Camera + LiDAR
+(Batch Fusion) KF 3D IoU JPDA
+mmMOT [5] 3D Re-ID + Start-End Camera + LiDAR
+(Batch Fusion) × × MIP
+Joint
+Detection
+and
+Tracking
+CenterTrack [15] 2D / 3D Paired Detection Camera Offset 2D Distance Greedy
+ChainedTrack [11] 2D Parallel Re-ID Camera × 2D IoU HA
+JDE [8] 2D Parallel Re-ID Camera KF 2D Distance HA
+RetinaTrack [9] 2D Parallel Re-ID Camera KF 2D IoU HA
+JMODT (ours) 3D Parallel Re-ID + Start-End Camera + LiDAR
+(Point-Wise Fusion) KF 3D DIoU Improved MIP
+“KF” means Kalman ﬁlter, “Offset” means the image-based deep offset prediction, “IoU” means intersection-over-union, “DIoU” means distance-IoU
+afﬁnity, “HA” means the Hungarian algorithm, “JPDA” means joint probabilistic data association, “MIP” means mixed-integer programming.
+association. The main contributions of this work include:
+1) Developing an end-to-end network that simultaneously
+generates 3D bounding boxes and association scores
+from camera and LiDAR measurements for real time
+joint detection and tracking.
+2) Developing a robust afﬁnity computation module that
+combines multi-modal features and 3D motion predic-
+tions with robust afﬁnity metrics.
+3) Developing a comprehensive data association module
+that takes both detection uncertainties and object cor-
+relation conﬁdences into account.
+4) Performing experiments on the KITTI tracking bench-
+mark [1]. Our method outperforms the baselines
+in terms of both tracking accuracy and process-
+ing speed. The open-source code is available at
+https://github.com/Kemo-Huang/JMODT
+The rest of this paper is organized as follows. Section II
+introduces the related work on MOT methods. Section III
+describes the system setup and problem statement. Section
+IV presents the proposed method. Section V provides the
+experiment results and discussions. Section VI concludes this
+paper.
+II. RELATED WORK
+TABLE I summarizes most state-of-the-art MOT methods
+for AD applications. For joint camera-LiDAR sensing modal-
+ities, there are only a few TBD methods [5], [7], however
+no JDT frameworks, have been developed. LiDAR data can
+provide extra 3D information but limits the frame rate at the
+same time. Usually, JDT frameworks use the same feature
+and paired frames for detection and Re-ID [8], [9], [11], [15],
+thus the extra 3D information can help improve the quality
+of parallel Re-ID. Besides, start-end estimation networks are
+used to create or delete new or obsolete IDs respectively
+within successive frames [5]. In this work, we develop a
+two-stage detector with two parallel branches of Re-ID and
+start-end estimation for paired-frame inputs.
+Afﬁnities among objects can be estimated using features,
+motion prediction and geometric intersections. Different
+from perspective-based data fusion for object detection [3],
+object-level batch feature fusion schemes have been devel-
+oped for MOT, where image features and LiDAR features are
+concatenated to represent the multi-modal features [7], or in
+terms of attention maps [5]. However, those batch fusion
+methods extract object features separately from each modal-
+ity, and do not leverage point-wise correspondences between
+two sets of data. In this work, we use a multi-scale point-wise
+feature fusion scheme [4] to estimate appearance afﬁnities.
+Kalman ﬁlters (KFs) have been extensively used for motion
+predictions in MOT [6]–[10], [12], [16]. Intersection-over-
+union (IoU) between each pair of object boxes, along with
+motion predictions, have been used as motion afﬁnities [7],
+[9], [11], [14]. However, IoU-based afﬁnities are too strict
+when targets have complex motions [6]; on the other hand,
+distance-IoUs [17] can tolerate more challenging situations.
+Therefore, we develop a 3D distance-IoU based metric for
+motion afﬁnity reﬁnement.
+Usually, data association is formulated as a bipartite graph
+matching problem and is solved using the Hungarian algo-
+rithm (HA) [13]. Besides, a variety of Bayesian methods [7],
+[18] have also been developed to utilize data temporal
+correlation. Recently, joint optimization among classiﬁcation
+conﬁdences, afﬁnities and start-end probabilities have been
+developed by using mixed-integer programming (MIP) and
+deep structure models (DSMs) [5], [19]. However, these
+methods use an extra DSM network to infer classiﬁcation
+conﬁdences with a redundant feature extraction process.
+Therefore, we propose a combined objective function to
+optimize both detection and tracking conﬁdences through a
+uniﬁed network.
+III. SYSTEM SETUP AND PROBLEM STATEMENT
+A. System Architecture
+The architecture of our system includes ﬁve main modules:
+(1) region proposal network (RPN), (2) parallel detection
+and correlation networks, (3) afﬁnity computation, (4) data
+association, and (5) track management, as shown in Fig.
+2. The tracking pipeline consists of ﬁve stages: (1) RPN
+takes calibrated sensor data from paired frames as input and
+generates regions of interest (RoI) and multi-modal features
+6984
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:20:14 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 3 ---
+Region Proposal
+Network
+Object Correlation
+Network
+Joint Multi-Object Detection and Tracking Track
+Management
+Camera
+Image
+LiDAR
+Point Cloud
+Sensor 
+Calibration
+2D-3D Point-wise
+Feature Fusion
+Sensor
+Data Input Object Detection
+Network
+Re-Identification
+Object Classification
+Box Regression
+Start-End Estimation
+Affinity Computation
+and Data Association
+Mixed-Integer
+Programming
+Motion 
+Prediction
+Affinity 
+Computation
+Birth
+Tracking
+Miss
+Death
+Match Score
+Ranking
+Region Proposal
+Processing
+Point Cloud Feature
+Encoder and Decoder
+Image Feature
+Encoder and Decoder
+Fig. 2. The system architecture of the proposed camera-LiDAR based joint multi-object detection and tracking system.
+of the region proposals; (2) the parallel detection and corre-
+lation networks use the RoI and proposal features to generate
+detection results, Re-ID afﬁnities and start-end probabilities;
+(3) the Re-ID afﬁnities are further reﬁned via the motion
+prediction and match score ranking modules; (4) the mixed-
+integer programming module performs comprehensive data
+association based on the detection results and computed
+afﬁnities; (5) the association results are further managed to
+achieve continuous tracks despite object occlusions and re-
+appearances.
+B. Problem Statement
+In this work, we focus on solving the following problems:
+• How to properly train the parallel detection and corre-
+lation networks with shared proposal features?
+• How to compute robust object afﬁnities based on motion
+prediction results and Re-ID scores?
+• How to achieve comprehensive data association using
+classiﬁcation conﬁdences, object afﬁnities and start-end
+probabilities via MIP?
+IV. PROPOSED METHODS
+A. Parallel Object Detection and Correlation
+To achieve parallelism of object detection and object
+correlation, the shared features of region proposals need
+additional processing. Without changing the region proposal
+generation and region point cloud encoding modules for
+object detection, we add two more feature processing mod-
+ules (region proposal feature selection and correlation) for
+object correlation, as shown in Fig. 3. Besides, the generated
+proposal features are saved in memory to avoid duplicate
+computation during network inference.
+1) Proposal Feature Selection: The foreground region
+proposals generated by RPN usually have low overlaps ( e.g.
+60%) with groundtruth boxes because they are originally
+used to train object detection network. Besides, those coarse
+proposals cannot be directly used in recognition tasks due to
+incomplete object information and object overlapping issues.
+Thus, we propose two operations to help proposal-region
+alignment during the correlation network training:
+• Set a high IoU threshold θiou for the proposal input.
+Fig. 3. Region proposal processing for training the object correlation
+network. The input proposal features with the same ID label are shown
+in the same color.
+• Compute the average of encoded proposal features
+which belong to the same target ID.
+Generally, the former operation ﬁlters out the useless inputs
+to guarantee the convergence of training. The latter oper-
+ation improves the proposal features by using the shared
+information and providing the missing information. On the
+other hand, a high classiﬁcation conﬁdence threshold θcls
+should also be set for the network inference because there
+is no supervision on background proposals in the feature
+correlation network after the proposal feature selection. In
+this work, we set θiou =θcls = 0.85 empirically.
+2) Proposal Feature Correlation: Before learning Re-ID
+and start-end conﬁdences, we adopt absolute subtraction [5]
+as the pair-wise correlation operation for the proposal fea-
+tures to represent the target dependency between adjacent
+frames. Given M selected proposals in frame t− 1 and N
+selected proposals in frame t, the correlated feature matrix
+then has the size of M×N. To obtain global inter-object
+information, the feature matrix is averaged along its rows and
+columns separately. Since start-end estimation is a symmetric
+task, the generated N “start” features and M “end” features
+are batched to feed one independent start-end network.
+6985
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:20:14 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 4 ---
+3) Object Correlation Network Speciﬁcs and Loss Func-
+tion: We use fully connected layers for both the Re-ID and
+start-end estimation networks. Each selected proposal feature
+can be assigned to a unique ID label. Each pair of selected
+features should have a binary label for ID matching. Thus,
+both Re-ID and start-end estimation become a sort of binary
+classiﬁcation tasks. We use softmax ranking [5] for Re-ID
+outputs and sigmoid activation for start-end outputs to map
+all conﬁdences to [0, 1]. We use L1 loss for the network
+training.
+B. Afﬁnity Computation
+The afﬁnity between each pair of objects should take
+into account both appearance and motion information. Ap-
+pearance afﬁnities are the softmax ranking results of Re-
+ID network outputs. Motion afﬁnities are computed based
+on the geometric similarities between detected object boxes
+and predicted object boxes. The pseudocode of afﬁnity
+computation is shown in Algorithm 1.
+1) Motion Prediction and Update: In this work, Kalman
+ﬁlter (KF) [16] is used for motion prediction. The motion
+state skf of each object is represented as:
+skf = (x,y,z,l,w,h,a,v x,vy,vz) (1)
+where (x,y,z ) denotes the box center location, (l,w,h )
+denotes the box size, a denotes the box heading angle,
+(vx,vy,vz) denotes the location change of box centers across
+consecutive frames ( i.e., the linear velocity). The prediction
+equation of skf is deﬁned as:
+ˆµt+1 =Aµt (2)
+where ˆµt+1 is the predicted mean of skf at time t + 1, µt
+is the estimated mean of skf at time t and A is the state
+transition matrix based on the constant velocity assumption.
+The state update equation is deﬁned as:
+µt+1 = ˆµt+1 +Kt+1(ot+1−H ˆµt+1) (3)
+whereot is the observation at time t,H is the measurement
+matrix, the Kalman gain Kt+1 at time t + 1 is deﬁned as:
+Kt+1 =Pt+1HT (HPk+1HT +R)−1 (4)
+where Pt+1 is the state covariance at time t + 1 and R is
+the measurement covariance. The update equation of P is
+deﬁned as:
+Pt+1 =APtAT +Q (5)
+whereQ is the process covariance. In this work,P0,H andR
+are simply estimated by the detection results. The predicted
+mean ˆµt+1 of skf is directly used for the 3D bounding box
+prediction Bt+1 at time t + 1.
+2) Afﬁnity Metrics: Inspired by Distance-IoU loss [17]
+in object detection, we propose 3D-DIoU afﬁnity Adiou =
+{adiou
+d,k ,d ∈ D,k ∈ K} for motion-based association
+between detection measurements D and tracks K:
+adiou
+d,k = (1− ρ(bd,bk)
+l ) + Bd∩Bk
+Bd∪Bk
+(6)
+where bi denotes the center of the 3D bounding box Bi for
+object i, ρ is the Euclidean distance and l is the diagonal
+length of the smallest box covering the two boxes. The
+former DIS = 1− ρ(bd,bk)
+l term helps to complement the
+latter IOU = Bd∩Bk
+Bd∪Bk
+term when the predicted box does
+not overlap with any other detected box. The reﬁned afﬁnity
+Xaff is the weighted sum of the appearance afﬁnity Aapp
+and the motion afﬁnity Adiou:
+Xaff =αAapp +βAdiou (7)
+where α +β = 1.
+Algorithm 1 Afﬁnity Computation
+Input: detection measurements D, tracks K and their
+proposal features F ={Fi,i∈ D∩ K}.
+Output: reﬁned afﬁnities Xaff ={xaff
+d,k ,d∈ D,k∈ K}.
+1: for each k∈ K do
+2: Bk← 3D box prediction for track k using KF.
+3: for each d∈ D do
+4: Fd,k← Feature correlation|Fd−Fk|
+5: aapp
+d,k ← Appearance Re-ID for feature Fd,k.
+6: Bd← 3D box generation for detection d.
+7: adiou
+d,k ←
+(
+1− ρ(bd,bt)
+c
+)
++ Bd∩Bt
+Bd∪Bt
+8: end for
+9: end for
+10: Aapp←{aapp
+d,k,d∈ D,k∈ K}
+11: Adiou←{adiou
+d,k ,d∈ D,k∈ K}
+12: P← Softmax Aapp along columns.
+13: Q← Softmax Aapp along rows.
+14: Aapp← 1
+2 (P + Q)
+15: Xaff←αAapp +βAdiou
+C. Mixed-Integer Programming for Data Association
+In the formulation of mixed-integer programming for data
+association, target matching states are represented by three
+types of binary integer variables:
+Y =
+[
+ycls,yaff,yse]
+(8)
+where ycls denotes whether an object is true positive, yaff
+denotes whether a measurement and a track are matched as
+the same object, yse denotes whether a measurement starts a
+new ID or a track ends its obsolete ID ( i.e., an object which
+should not be matched by others). The corresponding three
+types of linear conﬁdences are:
+X = [xcls,xaff,xse] (9)
+where xcls denotes the classiﬁcation conﬁdences from the
+object detection network, xaff denotes the reﬁned object
+afﬁnities from the afﬁnity computation module and xse
+denotes start-end probabilities from the start-end estimation
+network. Given detection measurements D and tracks K,
+the constraints for association variables are straightforward:
+∀d∈ D,ycls
+d =
+∑
+k
+yaff
+d,k +yse
+d (10)
+6986
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:20:14 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 5 ---
+∀k∈ K,ycls
+k =
+∑
+d
+yaff
+d,k +yse
+k (11)
+We propose the objective function of MIP as:
+arg max
+y
+[wcls(xcls− 1),waffxaff,wsexse]YT (12)
+where wcls, waff and wse are positive weights. We modify
+the positive coefﬁcient xcls in previous work [5], [19] to a
+negative coefﬁcient (xcls− 1) because the detection score
+should be a penalty term to prevent matching or creating
+trajectories for false positive measurements ( i.e., if the clas-
+siﬁcation conﬁdence of a target is low, then ycls for that
+target is more likely to be zero). Besides, additional weights
+are needed for the three terms because there is no constraint
+between the linear conﬁdences during the network training.
+These weights help to generate longer trajectories and fewer
+false outputs. The pipeline of MIP-based data association is
+shown in Algorithm 2.
+Algorithm 2 MIP-based Data Association
+Input: detection measurements D, tracks K, classiﬁcation
+conﬁdences Xcls, object afﬁnities Xaff and start-end
+probabilities Xse.
+Output: association results Y = [ycls,yaff,yse].
+1: Initialize binary integer variables ycls,yaff and yse.
+2: for each d∈D do
+3: ccls
+d ←wcls(xcls
+d − 1)
+4: cse
+d ←wsexse
+d
+5: Add constraints: ycls
+d =∑
+kyaff
+d,k +yse
+d
+6: end for
+7: for each k∈ K do
+8: ccls
+k ←wcls(xcls
+k − 1)
+9: cse
+k ←wsexse
+k
+10: Add constraints: ycls
+k =∑
+dyaff
+d,k +yse
+k
+11: end for
+12: for each d∈D do
+13: for each t∈T do
+14: caff
+d,k ←waffxaff
+d,k
+15: end for
+16: end for
+17: C← [ccls,caff,cse]
+18: Compute MIP solution: Y ← arg max
+y
+CY T
+V. EXPERIMENT RESULTS
+This work uses the KITTI tracking benchmark [1] as
+the evaluation platform. The dataset provides 21 training
+sequences and 29 test sequences of front-view camera images
+and LiDAR point clouds. The training sequences are split
+into a training set and a validation set with roughly equal
+number of frames. Speciﬁcally, the training set has 10
+sequences and 3975 frames, and the validation set contains
+11 sequences and 3945 frames. Each ground truth (GT)
+instance in a frame contains a 3D bounding box and with an
+unique ID. Only the track has 2D IoU with a GT box greater
+than 0.5 can be accepted as a true positive (TP). Tracks
+without matched GT boxes are regarded as false positives
+(FPs). GT boxes without matched tracks are regarded as false
+negatives (FNs). Following the KITTI benchmark, we use
+CLEARMOT, MT/PT/ML, ID switches (IDSW), fragmenta-
+tions (FRAG) and runtime per frame [20], [21] to evaluate
+MOT performance.
+Our system is implemented with PyTorch [22]. The pre-
+trained detection model of EPNet [4] is used. The correlation
+network is trained for 50 epochs with batch size 12. We
+use AdamW [23] optimizer with cosine annealing learning
+rate [24] 2e-4. For afﬁnity computation, we set β = 10α.
+For data association, we set wcls = 100 , waff = 22
+and wse = 1 . The hyperparameters are tuned via cross
+validation. For track management, we discard the traditional
+track incubation process because detection uncertainties have
+been considered in MIP. We set hit threshold θhit = 0 and
+miss threshold θmiss = 2. Further, we keep the tracks whose
+association results ycls = 0 as the tentative tracks and set
+their initial miss times nmiss = 1.
+We remove the appearance afﬁnity, IoU afﬁnity and dis-
+tance afﬁnity alternately to perform the ablation study, as
+shown in TABLE II. It can be seen that the use of all
+three afﬁnities together can greatly improve the tracking
+performance.
+TABLE II. Evaluation of different metrics for afﬁnity computation.
+Afﬁnity FP↓ FN↓ IDSW↓ MOTA↑
+APP 520 1098 659 79.51%
+DIS 637 954 5 85.64%
+IOU 532 1067 52 85.14%
+APP+DIS 534 1037 4 85.82%
+APP+IOU 556 1033 6 85.65%
+DIS+IOU 588 987 4 85.79%
+APP+DIS+IOU 578 975 2 86.01%
+To evaluate the impact of measurement uncertainties upon
+data association, we use the Hungarian algorithm (HA) as the
+baseline, where HA-based data association assumes all inputs
+are true positives. TABLE III shows the tracking performance
+using three sets of different qualities of inputs for two data
+association schemes. It can be seen that the proposed MIP
+method performs much better than HA.
+TABLE III. Evaluation of HA and MIP for data association.
+θcls Association FP↓ FN↓ IDSW↓ MOTA↑
+0.85 HA 1946 834 1169 64.47%
+MIP 578 975 2 86.01%
+0.90 HA 1781 881 1170 65.52%
+MIP 561 1000 1 85.94%
+0.95 HA 1466 1008 1087 67.96%
+MIP 483 1101 3 85.72%
+We choose the open-source camera-LiDAR fusion based
+method mmMOT [5] as our baseline to perform the case
+study. We use two cases to illustrate the superior performance
+of the developed MOT method. Case 1: the proposed robust
+object afﬁnity computation module helps to produce long
+trajectories with fewer ID switches, despite complex object
+motions and object occlusions in crowded scenes, as shown
+6987
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:20:14 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 6 ---
+Fig. 4. A comparison of bird’s eye view trajectories between our method and mmMOT using a KITTI data sequence. Trajectories with the same ID are
+shown in the same color. Region 1 indicates the case of complex object motion. Region 2 and 3 indicate the cases of object occlusions.
+TABLE IV. A comparison of tracking performance of camera-LiDAR based MOT methods on the test set of the KITTI car tracking benchmark.
+Method JDT AT MOTA↑ MOTP↑ FP↓ FN↓ MT↑ ML↓ IDSW↓ FRAG↓ Runtime↓
+JRMOT [7] × ✓ 85.70% 85.48% 772 4049 71.85% 4.00% 98 372 0.07s
+mmMOT [5] × ✓ 84.77% 85.21% 711 4243 73.23% 2.77% 284 753 0.02s
+JMODT (ours) ✓ × 86.27% 85.41% 1244 3433 77.38% 2.92% 45 586 0.01s
+“JDT” means joint detection and tracking. “AT” means the use of additional data sources for training. “MOTA” means MOT accuracy. “MOTP” means
+MOT precision. “MT” means mostly tracked. “ML” means mostly lost. The data come from http://www.cvlibs.net/datasets/kitti/old eval tracking.php.
+in Fig. 4. Case 2: the proposed start-end estimation module
+helps to create a new track even though two objects have
+the similar appearance, whereas the baseline method fails,
+as shown in Fig. 5.
+Fig. 5. A comparison of tracking trajectories between our method and
+mmMOT in a KITTI data sequence where two objects have the similar
+appearance.
+The results of this work (submitted to the KITTI test
+server) and other published methods on the test set of the
+KITTI car tracking benchmark are shown in TABLE IV. We
+follow the routine to report the running time of the tracking
+stage for a fair comparison. Our method outperforms all
+the reported camera-LiDAR fusion based methods in terms
+of MOTA and running speed. Most published methods pre-
+trained their networks on external datasets for better image
+feature extraction. In contrast, our model was trained without
+2D label or additional dataset. With the joint detection and
+tracking paradigm, we do not need to reload or crop sensor
+data. Thus, the total time cost of our method is much less
+than other fusion-based tracking-by-detection methods.
+VI. CONCLUSION
+In this paper, we have presented an end-to-end camera-
+LiDAR fusion based joint multi-object detection and tracking
+system. Our model uses 2D and 3D paired data frames and
+produces 3D bounding boxes and association conﬁdences
+for online mixed-integer programming. The proposed ro-
+bust afﬁnity computation and data association methods can
+greatly improve multi-object tracking performance. Without
+using additional training datasets, our method shows the
+state-of-the-art performance among camera-LiDAR fusion
+based MOT methods on the KITTI benchmark in terms of
+both MOTA (86.3%) and processing speed (0.01s). Due to
+the fusion of camera and LiDAR data and the merge of
+object detection and tracking, our method is highly suitable
+for autonomous driving applications which demand high
+tracking robustness and real time performance.
+6988
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:20:14 UTC from IEEE Xplore.  Restrictions apply. 
+
+--- Page 7 ---
+REFERENCES
+[1] A. Geiger, P. Lenz, and R. Urtasun, “Are we ready for autonomous
+driving? the kitti vision benchmark suite,” in 2012 IEEE Conference
+on Computer Vision and Pattern Recognition. IEEE, 2012, pp. 3354–
+3361.
+[2] E. Li, S. Wang, C. Li, D. Li, X. Wu, and Q. Hao, “Sustech points:
+A portable 3d point cloud interactive annotation platform system,” in
+2020 IEEE Intelligent Vehicles Symposium (IV) . IEEE, pp. 1108–
+1115.
+[3] C. R. Qi, W. Liu, C. Wu, H. Su, and L. J. Guibas, “Frustum pointnets
+for 3d object detection from rgb-d data,” in Proceedings of the IEEE
+conference on computer vision and pattern recognition, 2018, pp. 918–
+927.
+[4] T. Huang, Z. Liu, X. Chen, and X. Bai, “Epnet: Enhancing point
+features with image semantics for 3d object detection,” in European
+Conference on Computer Vision . Springer, 2020, pp. 35–52.
+[5] W. Zhang, H. Zhou, S. Sun, Z. Wang, J. Shi, and C. C. Loy,
+“Robust multi-modality multi-object tracking,” in Proceedings of the
+IEEE/CVF International Conference on Computer Vision , 2019, pp.
+2365–2374.
+[6] N. Wojke, A. Bewley, and D. Paulus, “Simple online and realtime
+tracking with a deep association metric,” in 2017 IEEE international
+conference on image processing (ICIP). IEEE, 2017, pp. 3645–3649.
+[7] A. Shenoi, M. Patel, J. Gwak, P. Goebel, A. Sadeghian, H. Rezatoﬁghi,
+R. Martin-Martin, and S. Savarese, “Jrmot: A real-time 3d multi-
+object tracker and a new large-scale dataset,” arXiv preprint
+arXiv:2002.08397, 2020.
+[8] Z. Wang, L. Zheng, Y . Liu, and S. Wang, “Towards real-time multi-
+object tracking,” arXiv preprint arXiv:1909.12605, vol. 2, no. 3, p. 4,
+2019.
+[9] Z. Lu, V . Rathod, R. V otel, and J. Huang, “Retinatrack: Online single
+stage joint detection and tracking,” in Proceedings of the IEEE/CVF
+conference on computer vision and pattern recognition , 2020, pp.
+14 668–14 678.
+[10] Y . Zhan, C. Wang, X. Wang, W. Zeng, and W. Liu, “A simple baseline
+for multi-object tracking,” arXiv preprint arXiv:2004.01888 , 2020.
+[11] J. Peng, C. Wang, F. Wan, Y . Wu, Y . Wang, Y . Tai, C. Wang, J. Li,
+F. Huang, and Y . Fu, “Chained-tracker: Chaining paired attentive
+regression results for end-to-end joint multiple-object detection and
+tracking,” in European Conference on Computer Vision . Springer,
+2020, pp. 145–161.
+[12] D. Mykheievskyi, D. Borysenko, and V . Porokhonskyy, “Learning
+local feature descriptors for multiple object tracking,” in Proceedings
+of the Asian Conference on Computer Vision , 2020.
+[13] H. W. Kuhn, “The hungarian method for the assignment problem,”
+Naval research logistics quarterly , vol. 2, no. 1-2, pp. 83–97, 1955.
+[14] N. F. Gonzalez, A. Ospina, and P. Calvez, “Smat: Smart multiple afﬁn-
+ity metrics for multiple object tracking,” in International Conference
+on Image Analysis and Recognition . Springer, 2020, pp. 48–62.
+[15] X. Zhou, V . Koltun, and P. Kr ¨ahenb¨uhl, “Tracking objects as points,”
+in European Conference on Computer Vision . Springer, 2020, pp.
+474–490.
+[16] S. Thrun, “Probabilistic robotics,” Communications of the ACM ,
+vol. 45, no. 3, pp. 52–57, 2002.
+[17] Z. Zheng, P. Wang, W. Liu, J. Li, R. Ye, and D. Ren, “Distance-
+iou loss: Faster and better learning for bounding box regression,” in
+Proceedings of the AAAI Conference on Artiﬁcial Intelligence, vol. 34,
+no. 07, 2020, pp. 12 993–13 000.
+[18] S. Scheidegger, J. Benjaminsson, E. Rosenberg, A. Krishnan, and
+K. Granstr ¨om, “Mono-camera 3d multi-object tracking using deep
+learning detections and pmbm ﬁltering,” in 2018 IEEE Intelligent
+Vehicles Symposium (IV). IEEE, 2018, pp. 433–440.
+[19] D. Frossard and R. Urtasun, “End-to-end learning of multi-sensor
+3d tracking by detection,” in 2018 IEEE international conference on
+robotics and automation (ICRA) . IEEE, 2018, pp. 635–642.
+[20] K. Bernardin and R. Stiefelhagen, “Evaluating multiple object tracking
+performance: the clear mot metrics,” EURASIP Journal on Image and
+Video Processing, vol. 2008, pp. 1–10, 2008.
+[21] Y . Li, C. Huang, and R. Nevatia, “Learning to associate: Hybrid-
+boosted multi-target tracker for crowded scene,” in 2009 IEEE con-
+ference on computer vision and pattern recognition . IEEE, 2009, pp.
+2953–2960.
+[22] A. Paszke, S. Gross, S. Chintala, G. Chanan, E. Yang, Z. DeVito,
+Z. Lin, A. Desmaison, L. Antiga, and A. Lerer, “Automatic differen-
+tiation in pytorch,” 2017.
+[23] I. Loshchilov and F. Hutter, “Decoupled weight decay regularization,”
+arXiv preprint arXiv:1711.05101 , 2017.
+[24] ——, “Sgdr: Stochastic gradient descent with warm restarts,” arXiv
+preprint arXiv:1608.03983, 2016.
+6989
+Authorized licensed use limited to: Southern University of Science and Technology. Downloaded on October 27,2025 at 04:20:14 UTC from IEEE Xplore.  Restrictions apply. 
+
